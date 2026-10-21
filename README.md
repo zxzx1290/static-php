@@ -14,7 +14,7 @@ Actions → **Build PHP bulk (linux amd64, cli + fpm)** → Run workflow
 |---|---|---|
 | `php-version` | `8.5.12` | Must be an exact `x.y.z` version |
 | `spc-ref` | `v3` | Upstream branch, tag or commit SHA. Pin a SHA for reproducible builds |
-| `extensions` | bulk set | Same as `dl.static-php.dev/v3/php-bin/bulk`, minus `imap` (see below) |
+| `extensions` | bulk set | Same as `dl.static-php.dev/v3/php-bin/bulk`, minus `imap` and `swoole` (see below) |
 | `debug` | off | Full build logs |
 
 PHP source is downloaded only from php.net (`--dl-no-alt`), and the job fails if
@@ -24,12 +24,16 @@ Download the `php-<version>-cli-fpm-linux-x86_64` artifact from the run. It cont
 `php`, `php-fpm`, `SHA256SUMS` and `BUILD-INFO.txt` (StaticPHP commit, PHP version,
 module list).
 
-## Note on imap
+## Extensions left out of the bulk set
 
-`imap` is left out by default: it was unbundled from PHP and depends on the
-unmaintained c-client library, and with StaticPHP v3 @ 594e643 the PHP 8.5.12
-build failed reading `php-src/ext/imap/config.m4`. Add it back to `extensions`
-if you need it.
+- `imap`: unbundled from PHP and depends on the unmaintained c-client library;
+  with StaticPHP v3 @ 594e643 the PHP 8.5.12 build failed reading
+  `php-src/ext/imap/config.m4`.
+- `swoole` (and `swoole-hook-*`): swoole v6.2.3 failed to compile against
+  PHP 8.5.12 (`no member named 'ap_php_snprintf' in namespace 'std'`, from
+  `php-src/main/snprintf.h` redefining `snprintf` inside the bundled nlohmann/json).
+
+Add them back to `extensions` if you need them.
 
 ## When to rebuild
 
