@@ -77,26 +77,33 @@ jobs:
       - name: "Verify binaries"
         run: |
           set -e
-          cli=buildroot/bin/php
-          fpm=buildroot/bin/php-fpm
-          $cli -v
-          $fpm -v
-          actual=$($cli -r 'echo PHP_VERSION;')
+          # buildroot/ is owned by root (written inside the build container),
+          # so collect the release files in a separate directory.
+          out=dist-out
+          mkdir -p "$out"
+          cp buildroot/bin/php buildroot/bin/php-fpm "$out/"
+          cli="$out/php"
+          fpm="$out/php-fpm"
+          "$cli" -v
+          "$fpm" -v
+          actual=$("$cli" -r 'echo PHP_VERSION;')
           if [ "$actual" != "$PHP_VERSION" ]; then
             echo "::error::Expected PHP $PHP_VERSION but built $actual"
             exit 1
           fi
-          $fpm -v | grep -q "^PHP $PHP_VERSION " || { echo "::error::php-fpm version mismatch"; exit 1; }
-          file $cli $fpm
-          (cd buildroot/bin && sha256sum php php-fpm > SHA256SUMS)
-          echo "spc-commit: ${{ steps.spc.outputs.sha }}" > buildroot/bin/BUILD-INFO.txt
-          echo "php-version: $actual" >> buildroot/bin/BUILD-INFO.txt
-          echo "extensions: $EXTENSIONS" >> buildroot/bin/BUILD-INFO.txt
-          $cli -m >> buildroot/bin/BUILD-INFO.txt
+          "$fpm" -v | grep -q "^PHP $PHP_VERSION " || { echo "::error::php-fpm version mismatch"; exit 1; }
+          file "$cli" "$fpm"
+          (cd "$out" && sha256sum php php-fpm > SHA256SUMS)
+          {
+            echo "spc-commit: ${{ steps.spc.outputs.sha }}"
+            echo "php-version: $actual"
+            echo "extensions: $EXTENSIONS"
+            "$cli" -m
+          } > "$out/BUILD-INFO.txt"
           {
             echo "### PHP $actual"
             echo '```'
-            cat buildroot/bin/SHA256SUMS
+            cat "$out/SHA256SUMS"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -112,11 +119,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: php-${{ inputs.php-version }}-cli-fpm-linux-x86_64
-          path: |
-            buildroot/bin/php
-            buildroot/bin/php-fpm
-            buildroot/bin/SHA256SUMS
-            buildroot/bin/BUILD-INFO.txt
+          path: dist-out/
           if-no-files-found: error
 
       - name: "Upload licenses and manifest"
