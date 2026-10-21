@@ -1,0 +1,129 @@
+name: "Build PHP bulk (linux amd64, cli + fpm)"
+
+# Builds a fully static PHP (musl, x86_64) with StaticPHP v3, checked out from
+# upstream at build time, so this repo never needs to be synced.
+# Default extension set = https://dl.static-php.dev/v3/php-bin/bulk/
+
+on:
+  workflow_dispatch:
+    inputs:
+      php-version:
+        description: Exact PHP version (x.y.z), e.g. 8.5.12
+        required: true
+        default: '8.5.12'
+        type: string
+      spc-ref:
+        description: Upstream crazywhalecc/static-php-cli branch, tag or commit SHA
+        required: true
+        default: 'v3'
+        type: string
+      extensions:
+        description: Extensions (comma separated)
+        required: true
+        type: string
+        default: "apcu,bcmath,bz2,calendar,ctype,curl,dba,dom,event,exif,fileinfo,filter,ftp,gd,gmp,iconv,imagick,imap,intl,mbregex,mbstring,mysqli,mysqlnd,opcache,openssl,opentelemetry,pcntl,pdo,pdo_mysql,pgsql,phar,posix,protobuf,readline,redis,session,shmop,simplexml,soap,sockets,sodium,sqlite3,swoole,swoole-hook-mysql,swoole-hook-pgsql,swoole-hook-sqlite,sysvmsg,sysvsem,sysvshm,tokenizer,xml,xmlreader,xmlwriter,xsl,zip,zlib"
+      debug:
+        description: Show full build logs
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: "PHP ${{ inputs.php-version }} (spc ${{ inputs.spc-ref }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      # Used by StaticPHP for GitHub release downloads (passed into the build container)
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PHP_VERSION: ${{ inputs.php-version }}
+      EXTENSIONS: ${{ inputs.extensions }}
+    steps:
+      - name: "Validate PHP version"
+        run: |
+          if ! [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::php-version must be an exact x.y.z version, got '$PHP_VERSION'"
+            exit 1
+          fi
+
+      - name: "Checkout StaticPHP (upstream)"
+        uses: actions/checkout@v4
+        with:
+          repository: crazywhalecc/static-php-cli
+          ref: ${{ inputs.spc-ref }}
+
+      - name: "Record upstream commit"
+        id: spc
+        run: |
+          sha=$(git rev-parse HEAD)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "StaticPHP commit: $sha" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Build PHP"
+        run: |
+          # php-src only from php.net (--dl-no-alt): phpmirror.static-php.dev can lag behind releases
+          ./bin/spc-alpine-docker build "$EXTENSIONS" \
+            --build-cli --build-fpm \
+            --with-suggests \
+            --dl-with-php="$PHP_VERSION" \
+            --dl-ignore-cache=php-src \
+            --dl-no-alt \
+            --dl-prefer-binary \
+            --dl-retry=5 \
+            ${{ inputs.debug && '--debug' || '' }}
+
+      - name: "Verify binaries"
+        run: |
+          set -e
+          cli=buildroot/bin/php
+          fpm=buildroot/bin/php-fpm
+          $cli -v
+          $fpm -v
+          actual=$($cli -r 'echo PHP_VERSION;')
+          if [ "$actual" != "$PHP_VERSION" ]; then
+            echo "::error::Expected PHP $PHP_VERSION but built $actual"
+            exit 1
+          fi
+          $fpm -v | grep -q "^PHP $PHP_VERSION " || { echo "::error::php-fpm version mismatch"; exit 1; }
+          file $cli $fpm
+          (cd buildroot/bin && sha256sum php php-fpm > SHA256SUMS)
+          echo "spc-commit: ${{ steps.spc.outputs.sha }}" > buildroot/bin/BUILD-INFO.txt
+          echo "php-version: $actual" >> buildroot/bin/BUILD-INFO.txt
+          echo "extensions: $EXTENSIONS" >> buildroot/bin/BUILD-INFO.txt
+          $cli -m >> buildroot/bin/BUILD-INFO.txt
+          {
+            echo "### PHP $actual"
+            echo '```'
+            cat buildroot/bin/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Upload logs on failure"
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spc-logs-${{ inputs.php-version }}-linux-x86_64
+          path: log/
+          if-no-files-found: ignore
+
+      - name: "Upload binaries"
+        uses: actions/upload-artifact@v4
+        with:
+          name: php-${{ inputs.php-version }}-cli-fpm-linux-x86_64
+          path: |
+            buildroot/bin/php
+            buildroot/bin/php-fpm
+            buildroot/bin/SHA256SUMS
+            buildroot/bin/BUILD-INFO.txt
+          if-no-files-found: error
+
+      - name: "Upload licenses and manifest"
+        uses: actions/upload-artifact@v4
+        with:
+          name: php-${{ inputs.php-version }}-licenses-linux-x86_64
+          path: |
+            buildroot/license/
+            buildroot/build-manifest.json
+          if-no-files-found: warn
